@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Quantity Surveying Salary Guide</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script type="module">
+        // Firebase Imports
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        document.addEventListener('DOMContentLoaded', () => {
+            // --- DOM Elements ---
+            const form = document.getElementById('salaryForm');
+            const countrySelect = document.getElementById('country');
+            const ukLocationDiv = document.getElementById('ukLocation');
+            const countySelect = document.getElementById('county');
+            const cityInput = document.getElementById('city');
+            const salaryTableBody = document.getElementById('salaryTableBody');
+            const filterRole = document.getElementById('filterRole');
+            const filterSector = document.getElementById('filterSector');
+            const filterCountry = document.getElementById('filterCountry');
+            const loadingSpinner = document.getElementById('loadingSpinner');
+            const noResultsMessage = document.getElementById('noResultsMessage');
+            const successMessage = document.getElementById('successMessage');
+            const errorMessage = document.getElementById('errorMessage');
+
+            // --- Firebase & App Initialization ---
+            const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const app = initializeApp(firebaseConfig);
+            const db = getFirestore(app);
+            const auth = getAuth(app);
+            const salariesCollectionPath = `artifacts/${appId}/public/data/salaries`;
+
+            // --- UK Counties Data ---
+            const ukCounties = ["Avon", "Bedfordshire", "Berkshire", "Buckinghamshire", "Cambridgeshire", "Cheshire", "Cleveland", "Cornwall", "Cumbria", "Derbyshire", "Devon", "Dorset", "Durham", "East Sussex", "Essex", "Gloucestershire", "Greater London", "Greater Manchester", "Hampshire", "Herefordshire", "Hertfordshire", "Isle of Wight", "Kent", "Lancashire", "Leicestershire", "Lincolnshire", "Merseyside", "Norfolk", "North Yorkshire", "Northamptonshire", "Northumberland", "Nottinghamshire", "Oxfordshire", "Rutland", "Shropshire", "Somerset", "South Yorkshire", "Staffordshire", "Suffolk", "Surrey", "Tyne and Wear", "Warwickshire", "West Midlands", "West Sussex", "West Yorkshire", "Wiltshire", "Worcestershire"];
+            ukCounties.forEach(county => {
+                const option = document.createElement('option');
+                option.value = county;
+                option.textContent = county;
+                countySelect.appendChild(option);
+            });
+            
+            // --- Event Listeners ---
+            countrySelect.addEventListener('change', () => {
+                ukLocationDiv.classList.toggle('hidden', countrySelect.value !== 'United Kingdom');
+            });
+
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const formData = new FormData(form);
+                const data = {
+                    role: formData.get('role'),
+                    sector: formData.get('sector'),
+                    country: formData.get('country'),
+                    county: formData.get('country') === 'United Kingdom' ? formData.get('county') : null,
+                    city: formData.get('country') === 'United Kingdom' ? formData.get('city') : null,
+                    timeInRole: formData.get('timeInRole'),
+                    salaryRange: formData.get('salaryRange'),
+                    submittedAt: new Date()
+                };
+
+                try {
+                    await addDoc(collection(db, salariesCollectionPath), data);
+                    form.reset();
+                    ukLocationDiv.classList.add('hidden');
+                    successMessage.classList.remove('hidden');
+                    setTimeout(() => successMessage.classList.add('hidden'), 3000);
+                } catch (error) {
+                    console.error("Error adding document: ", error);
+                    errorMessage.textContent = `Error: ${error.message}`;
+                    errorMessage.classList.remove('hidden');
+                    setTimeout(() => errorMessage.classList.add('hidden'), 5000);
+                }
+            });
+            
+            [filterRole, filterSector, filterCountry].forEach(filter => {
+                filter.addEventListener('change', filterAndDisplayData);
+            });
+
+            // --- Data Loading and Display ---
+            let allSalaries = [];
+            let unsubscribe; // To hold the onSnapshot listener
+
+            function loadSalaryData() {
+                loadingSpinner.classList.remove('hidden');
+                noResultsMessage.classList.add('hidden');
+                
+                const salariesCol = collection(db, salariesCollectionPath);
+                
+                // Unsubscribe from previous listener if it exists
+                if (unsubscribe) {
+                    unsubscribe();
+                }
+
+                // Use onSnapshot for real-time updates
+                unsubscribe = onSnapshot(salariesCol, (snapshot) => {
+                    allSalaries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    filterAndDisplayData();
+                }, (error) => {
+                    console.error("Error fetching salaries: ", error);
+                    loadingSpinner.classList.add('hidden');
+                    errorMessage.textContent = `Error loading data: ${error.message}`;
+                    errorMessage.classList.remove('hidden');
+                });
+            }
+
+            function filterAndDisplayData() {
+                const role = filterRole.value;
+                const sector = filterSector.value;
+                const country = filterCountry.value;
+
+                let filteredData = allSalaries;
+
+                if (role) {
+                    filteredData = filteredData.filter(item => item.role === role);
+                }
+                if (sector) {
+                    filteredData = filteredData.filter(item => item.sector === sector);
+                }
+                if (country) {
+                    filteredData = filteredData.filter(item => item.country === country);
+                }
+                
+                displayData(filteredData);
+            }
+
+            function displayData(data) {
+                loadingSpinner.classList.add('hidden');
+                salaryTableBody.innerHTML = '';
+
+                if (data.length === 0) {
+                    noResultsMessage.classList.remove('hidden');
+                    return;
+                }
+                
+                noResultsMessage.classList.add('hidden');
+
+                // Sort data by submission date, newest first
+                data.sort((a, b) => {
+                    const dateA = a.submittedAt?.toDate ? a.submittedAt.toDate() : new Date(0);
+                    const dateB = b.submittedAt?.toDate ? b.submittedAt.toDate() : new Date(0);
+                    return dateB - dateA;
+                });
+
+                data.forEach(item => {
+                    const row = document.createElement('tr');
+                    row.className = 'border-b border-gray-200 hover:bg-gray-50';
+                    
+                    let location = item.country;
+                    if (item.country === 'United Kingdom' && (item.city || item.county)) {
+                        const cityPart = item.city ? item.city : 'N/A';
+                        const countyPart = item.county ? item.county : 'N/A';
+                        location = `${cityPart}, ${countyPart}, UK`;
+                    }
+
+                    row.innerHTML = `
+                        <td class="py-3 px-6 text-left">${item.role || 'N/A'}</td>
+                        <td class="py-3 px-6 text-left">${item.sector || 'N/A'}</td>
+                        <td class="py-3 px-6 text-left">${location || 'N/A'}</td>
+                        <td class="py-3 px-6 text-center">${item.timeInRole || 'N/A'}</td>
+                        <td class="py-3 px-6 text-center">${item.salaryRange || 'N/A'}</td>
+                    `;
+                    salaryTableBody.appendChild(row);
+                });
+            }
+            
+            // --- Authentication ---
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    console.log("Authenticated with UID:", user.uid);
+                    loadSalaryData();
+                } else {
+                    console.log("User is not signed in.");
+                    if (unsubscribe) unsubscribe();
+                    loadingSpinner.classList.add('hidden');
+                    salaryTableBody.innerHTML = '';
+                    noResultsMessage.classList.remove('hidden');
+                    noResultsMessage.textContent = 'Authenticating... Please wait.';
+                }
+            });
+
+            // --- Perform Initial Sign In ---
+            (async () => {
+                try {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                        console.log("Signed in with custom token.");
+                    } else {
+                        await signInAnonymously(auth);
+                        console.log("Signed in anonymously.");
+                    }
+                } catch (error) {
+                    console.error("Sign-in failed:", error);
+                    errorMessage.textContent = 'Authentication failed. Please refresh the page.';
+                    errorMessage.classList.remove('hidden');
+                    loadingSpinner.classList.add('hidden');
+                }
+            })();
+        });
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .form-select, .form-input {
+            transition: all 0.3s ease-in-out;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+
+    <!-- Header -->
+    <header class="bg-white shadow-md">
+        <nav class="container mx-auto px-6 py-4">
+            <h1 class="text-3xl font-bold text-gray-900">The Quantity Surveying Salary Guide</h1>
+            <p class="text-gray-600 mt-1">Anonymously share and compare salary information in the industry.</p>
+        </nav>
+    </header>
+
+    <main class="container mx-auto px-6 py-8">
+
+        <!-- Submission Form Section -->
+        <section id="submit" class="bg-white p-8 rounded-lg shadow-lg mb-12">
+            <h2 class="text-2xl font-semibold mb-6">Share Your Salary</h2>
+            
+            <div id="successMessage" class="hidden bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded relative mb-4" role="alert">
+                <strong class="font-bold">Success!</strong>
+                <span class="block sm:inline"> Your data has been submitted anonymously.</span>
+            </div>
+            <div id="errorMessage" class="hidden bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
+                <!-- Error content is set by JS -->
+            </div>
+
+            <form id="salaryForm" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Role -->
+                <div>
+                    <label for="role" class="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                    <select id="role" name="role" required class="form-select block w-full mt-1 rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+                        <option value="">Select your role</option>
+                        <option value="Assistant Quantity Surveyor">Assistant Quantity Surveyor</option>
+                        <option value="Quantity Surveyor">Quantity Surveyor</option>
+                        <option value="Senior Quantity Surveyor">Senior Quantity Surveyor</option>
+                        <option value="Managing Quantity Surveyor">Managing Quantity Surveyor</option>
+                        <option value="Commercial Manager">Commercial Manager</option>
+                        <option value="Estimator">Estimator</option>
+                    </select>
+                </div>
+
+                <!-- Sector -->
+                <div>
+                    <label for="sector" class="block text-sm font-medium text-gray-700 mb-1">Sector</label>
+                    <select id="sector" name="sector" required class="form-select block w-full mt-1 rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+                        <option value="">Select your sector</option>
+                        <option value="Consultancy">Consultancy</option>
+                        <option value="Main Contractor">Main Contractor</option>
+                        <option value="Sub-Contractor">Sub-Contractor</option>
+                        <option value="Developer">Developer</option>
+                        <option value="Public Sector">Public Sector</option>
+                        <option value="Other">Other</option>
+                    </select>
+                </div>
+
+                <!-- Country -->
+                <div>
+                    <label for="country" class="block text-sm font-medium text-gray-700 mb-1">Country</label>
+                    <select id="country" name="country" required class="form-select block w-full mt-1 rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+                        <option value="">Select country</option>
+                        <option value="United Kingdom">United Kingdom</option>
+                        <option value="Ireland">Ireland</option>
+                        <option value="United States">United States</option>
+                        <option value="Canada">Canada</option>
+                        <option value="Australia">Australia</option>
+                        <option value="New Zealand">New Zealand</option>
+                        <option value="Other">Other</option>
+                    </select>
+                </div>
+
+                <!-- UK Specific Location -->
+                <div id="ukLocation" class="hidden md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label for="county" class="block text-sm font-medium text-gray-700 mb-1">County (UK)</label>
+                        <select id="county" name="county" class="form-select block w-full mt-1 rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+                           <option value="">Select county</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="city" class="block text-sm font-medium text-gray-700 mb-1">City (UK)</label>
+                        <input type="text" id="city" name="city" class="form-input block w-full mt-1 rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+                    </div>
+                </div>
+
+                <!-- Time in Role -->
+                <div>
+                    <label for="timeInRole" class="block text-sm font-medium text-gray-700 mb-1">Time in Role</label>
+                    <select id="timeInRole" name="timeInRole" required class="form-select block w-full mt-1 rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+                        <option value="">Select duration</option>
+                        <option value="0-1 years">0-1 years</option>
+                        <option value="1-3 years">1-3 years</option>
+                        <option value="3-5 years">3-5 years</option>
+                        <option value="5-10 years">5-10 years</option>
+                        <option value="10+ years">10+ years</option>
+                    </select>
+                </div>
+
+                <!-- Salary Range -->
+                <div>
+                    <label for="salaryRange" class="block text-sm font-medium text-gray-700 mb-1">Salary Range (£ GBP)</label>
+                    <select id="salaryRange" name="salaryRange" required class="form-select block w-full mt-1 rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+                        <option value="">Select range</option>
+                        <option value="< £25,000">&lt; £25,000</option>
+                        <option value="£25,000 - £35,000">£25,000 - £35,000</option>
+                        <option value="£35,000 - £45,000">£35,000 - £45,000</option>
+                        <option value="£45,000 - £55,000">£45,000 - £55,000</option>
+                        <option value="£55,000 - £65,000">£55,000 - £65,000</option>
+                        <option value="£65,000 - £75,000">£65,000 - £75,000</option>
+                        <option value="£75,000 - £90,000">£75,000 - £90,000</option>
+                        <option value="£90,000+">£90,000+</option>
+                    </select>
+                </div>
+
+                <!-- Submit Button -->
+                <div class="md:col-span-2 text-right">
+                    <button type="submit" class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        Submit Anonymously
+                    </button>
+                </div>
+            </form>
+        </section>
+
+        <!-- Data Display Section -->
+        <section id="data">
+            <h2 class="text-2xl font-semibold mb-6">Community Salary Data</h2>
+
+            <!-- Filters -->
+            <div class="bg-white p-4 rounded-lg shadow-md mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                    <label for="filterRole" class="block text-sm font-medium text-gray-700">Filter by Role</label>
+                    <select id="filterRole" class="form-select block w-full mt-1 rounded-md border-gray-300 shadow-sm">
+                        <option value="">All Roles</option>
+                        <option value="Assistant Quantity Surveyor">Assistant Quantity Surveyor</option>
+                        <option value="Quantity Surveyor">Quantity Surveyor</option>
+                        <option value="Senior Quantity Surveyor">Senior Quantity Surveyor</option>
+                        <option value="Managing Quantity Surveyor">Managing Quantity Surveyor</option>
+                        <option value="Commercial Manager">Commercial Manager</option>
+                        <option value="Estimator">Estimator</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="filterSector" class="block text-sm font-medium text-gray-700">Filter by Sector</label>
+                    <select id="filterSector" class="form-select block w-full mt-1 rounded-md border-gray-300 shadow-sm">
+                        <option value="">All Sectors</option>
+                        <option value="Consultancy">Consultancy</option>
+                        <option value="Main Contractor">Main Contractor</option>
+                        <option value="Sub-Contractor">Sub-Contractor</option>
+                        <option value="Developer">Developer</option>
+                        <option value="Public Sector">Public Sector</option>
+                        <option value="Other">Other</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="filterCountry" class="block text-sm font-medium text-gray-700">Filter by Country</label>
+                    <select id="filterCountry" class="form-select block w-full mt-1 rounded-md border-gray-300 shadow-sm">
+                        <option value="">All Countries</option>
+                        <option value="United Kingdom">United Kingdom</option>
+                        <option value="Ireland">Ireland</option>
+                        <option value="United States">United States</option>
+                        <option value="Canada">Canada</option>
+                        <option value="Australia">Australia</option>
+                        <option value="New Zealand">New Zealand</option>
+                        <option value="Other">Other</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Salary Table -->
+            <div class="bg-white rounded-lg shadow-lg overflow-hidden">
+                 <div class="relative">
+                    <table class="min-w-full leading-normal">
+                        <thead class="bg-gray-800 text-white">
+                            <tr>
+                                <th class="py-3 px-6 text-left text-xs font-semibold uppercase tracking-wider">Role</th>
+                                <th class="py-3 px-6 text-left text-xs font-semibold uppercase tracking-wider">Sector</th>
+                                <th class="py-3 px-6 text-left text-xs font-semibold uppercase tracking-wider">Location</th>
+                                <th class="py-3 px-6 text-center text-xs font-semibold uppercase tracking-wider">Time in Role</th>
+                                <th class="py-3 px-6 text-center text-xs font-semibold uppercase tracking-wider">Salary (GBP)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="salaryTableBody" class="text-gray-700">
+                            <!-- Rows will be injected by JavaScript -->
+                        </tbody>
+                    </table>
+                    <div id="loadingSpinner" class="absolute inset-0 bg-white bg-opacity-75 flex items-center justify-center">
+                        <div class="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-indigo-500"></div>
+                    </div>
+                     <div id="noResultsMessage" class="hidden text-center py-12 px-6">
+                        <p class="text-gray-500 text-lg">No matching records found. Try adjusting your filters.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="text-center py-6 mt-8">
+        <p class="text-gray-500">&copy; 2024 The Quantity Surveying Salary Guide. All data is user-submitted and anonymous.</p>
+    </footer>
+
+</body>
+</html>
